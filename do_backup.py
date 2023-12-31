@@ -21,8 +21,7 @@ def list_absolute(directory, exclude):
     output_list = []
     full_exclude = []
     full_exclude += exclude
-    full_exclude += global_exclude_files
-    full_exclude += global_exclude_dirs
+    full_exclude += global_exclude
     directory = os.path.normpath(directory)
 
     for filepath in pathlib.Path(directory).glob("*"):
@@ -33,31 +32,33 @@ def list_absolute(directory, exclude):
     return output_list
 
 
-def create_backup_zip(zip_filename, directories):
+def create_backup_zip(zip_filename: str, paths: list):
     print(f"🤐 Zipping directories to {backup_path}")
-    added_files = set()
     with zipfile.ZipFile(zip_filename, "w") as zip_file:
-        for directory in directories:
-            for current_folder, subfolders, filenames in os.walk(directory):
-                subfolders[:] = [
-                    subfolder
-                    for subfolder in subfolders
-                    # if subfolder not in exclude_dirs
-                    if not matches_any_glob(subfolder, global_exclude_dirs)
-                ]
-
+        for path in paths:
+            if os.path.isfile(path):
+                add_to_zip_file(path, zip_file)
+                continue
+            for current_folder, subfolders, filenames in os.walk(path):
                 for filename in filenames:
                     # if filename not in exclude_files:
-                    if not matches_any_glob(filename, global_exclude_files):
-                        file_path = os.path.join(current_folder, filename)
-                        if (
-                            os.path.exists(file_path)
-                            and os.access(file_path, os.R_OK)
-                            and file_path not in added_files
-                        ):
-                            zip_file.write(file_path)
-                            added_files.add(file_path)
+                    file_path = os.path.join(current_folder, filename)
+                    add_to_zip_file(file_path, zip_file)
+
     print("🤐✅ Zip complete")
+
+
+def add_to_zip_file(file_path: str, zip_file: zipfile.ZipFile):
+    if not os.access(file_path, os.R_OK):
+        print(f"cant read {file_path}")
+    if (
+        os.path.exists(file_path)
+        and os.access(file_path, os.R_OK)
+        and not matches_any_glob(file_path, global_exclude)
+        and file_path not in added_files
+    ):
+        zip_file.write(file_path)
+        added_files.add(file_path)
 
 
 def purge_old_backups():
@@ -126,8 +127,7 @@ def backup_to_remote(backup_path, backup_name):
 #     "max_backup_age_days": 7,
 #     "rclone_backup_type": "crypt",
 #     "rclone_config_location": "/etc/rclone/rclone.conf",
-#     "global_exclude_files": [".DS_Store", "home-assistant.log*"], // files to always exclude
-#     "global_exclude_dirs": ["node_modules"], // directories to always exclude
+#     "global_exclude": ["**/*.DS_Store", "**/home-assistant.log*", "**/node_modules/**"],
 #     "files_to_backup": [
 #         {
 #             "include": ["/path/to/directory"],
@@ -137,24 +137,24 @@ def backup_to_remote(backup_path, backup_name):
 # }
 
 config_file = sys.argv[1]
-print(f"🟢 Starting backup using config: {config_file}")
 
 with open(config_file, "r") as file:
     config = json.load(file)
 
-global_exclude_dirs = config["global_exclude_dirs"]
+now = datetime.now()
+print(f"🟢 Starting backup at {now} using config: {config_file}")
+global_exclude = config["global_exclude"]
 backup_dir_location = config["backup_dir_location"]
-list(global_exclude_dirs).append(backup_dir_location)
-global_exclude_files = config["global_exclude_files"]
+list(global_exclude).append(backup_dir_location)
 files_to_backup = config["files_to_backup"]
 max_backup_age_days = config["max_backup_age_days"]
 day_pluralized = "day" if max_backup_age_days == 1 else "days"
-now = datetime.now()
 backup_name = now.strftime("%Y-%m-%d")
 backup_path = os.path.join(backup_dir_location, f"{backup_name}.zip")
 rclone_backup_type = config["rclone_backup_type"]
 rclone_config_location = config["rclone_config_location"]
 rclone_args = []
+added_files = set()
 
 if not rclone_config_location == "" and not rclone_config_location == None:
     rclone_args.append(f"--config={rclone_config_location}")
